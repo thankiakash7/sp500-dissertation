@@ -1,0 +1,6 @@
+model,vs_baseline,dm_stat,p_value,n_days,interpretation
+ar1_garch_t,mean_baseline,-1.522,0.1283,1258,worse
+arma,mean_baseline,-1.5218,0.1283,1258,worse
+gru,mean_baseline,1.2505,0.2113,1258,no sig diff
+lstm,mean_baseline,0.8904,0.3734,1258,no sig diff
+tft,mean_baseline,1.0793,0.2807,1258,no sig diff

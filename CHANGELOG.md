@@ -1,0 +1,212 @@
+# Changelog
+
+## This revision — walk-forward methodology fix + pipeline cleanup
+
+### Real CRSP data was being committed as a "report table" (fixed)
+
+`notebooks/05_crsp_data_audit.ipynb` was writing the raw rows behind its
+membership-validity audit — `permno, date, ticker, ret, mktcap` for every
+row outside a valid S&P 500 membership window — directly to
+`reports/tables/invalid_sp500_membership_rows.csv`. That's 523,803 rows of
+real CRSP return and market-cap data, committed to a "report table" and
+duplicated again in `dissertation_materials/tables/`, in the exact
+`.gitignore`/README-documented violation this project says elsewhere it
+avoids: WRDS licensing does not permit redistributing CRSP data, derived
+or otherwise. The same notebook cell also had a `.head(20)` inline display
+of the same raw columns, whose *output* (not just the code) was saved in
+the notebook file — another 20 rows of real return data embedded directly
+in a committed `.ipynb`. Fixed both: the notebook now saves an aggregate
+summary only (row count, unique PERMNO count, date range —
+`invalid_sp500_membership_rows_summary.csv`), and the inline-display
+cell's stored output was cleared. Because this was already in this
+delivery's git history by the time it was found, the commit was amended
+and the repository's `.git/objects` were pruned rather than left as
+unreferenced-but-recoverable blobs — verified via `git fsck --unreachable`
+returning nothing and `.git` shrinking from including a 50MB+ CSV pair to
+1.9MB total.
+
+### The core fix: LSTM/GRU/TFT are now genuinely walk-forward
+
+**Problem.** `step1_classical.py` retrained (mean baseline, ARMA,
+AR(1)-GARCH-t) every 21 trading days over the 2020-2024 test window — true
+walk-forward evaluation. `step2_deep.py` and `step3_tft.py` fit LSTM, GRU,
+and TFT **once** on data through 2018-12-31 and predicted straight through
+2020-2024 without ever updating on new data — a static train/test split.
+`README_NEXT_NOTEBOOKS.md` explicitly warned *"Do not claim the static
+LSTM/GRU/TFT results are final walk-forward results"*, and a
+`src/evaluation/walk_forward_dl.py` module already existed with a correct
+walk-forward engine for LSTM/GRU — but it was never called from step2 or
+step3, and its own docstring said it had "only [been] smoke-tested," not
+run at scale. The generated `README_pipeline.md` nonetheless claimed *"All
+models are evaluated using a strict walk-forward forecasting framework"*
+and presented all six models in one results table with no methodological
+distinction. This mattered for the dissertation's central claim (LSTM/GRU
+narrowly beating the mean baseline on RMSE): the deep learning models had
+an informational advantage — a single large training set and no
+concept-drift stress test — that the classical models never got.
+
+**Fix.**
+- `src/evaluation/walk_forward_dl.py` extended to support all three
+  architectures (LSTM/GRU/TFT) via a shared `build_model()` factory
+  (`src/models/deep.py`), instead of only LSTM/GRU.
+- `step2_deep.py` and `step3_tft.py` rewritten to call
+  `walk_forward_train_predict()` instead of doing a single fit-and-predict.
+  Both now retrain every `RETRAIN_EVERY=21` trading days, exactly like
+  `step1_classical.py`.
+- Documented, explicit compromise: retraining a sequence model from
+  scratch ~60 times over 5 years is a different order of compute than the
+  classical models' MLE fits, so each retrain **warm-starts** from the
+  previous block's weights and fine-tunes for a small number of epochs
+  rather than fully refitting from scratch. This is standard in
+  online/continual-learning forecasting setups, but it is a specific,
+  citable design choice, not "the same as step1" — the README and
+  methodology write-up should describe it as such.
+- Standardisation statistics (return mean/std used to scale network
+  inputs) are now recomputed at every retrain block using only
+  information available at that point, removing a small forward-looking
+  convenience the old static split had (computing them once at
+  `TRAIN_END` and reusing them for the whole test period).
+- Added resumable, block-level checkpointing to the walk-forward engine
+  (mirroring `step1_classical.py`'s existing pattern), since a full
+  walk-forward DL run is now a genuinely multi-hour job. Verified this
+  works in practice, not just in a mocked test: a real TFT training run
+  was interrupted mid-block by a sandbox timeout and, on rerun, resumed
+  from the correct block instead of restarting.
+- Added `estimate_full_run_seconds()`, which times a handful of real
+  batches on the actual machine and projects total wall-clock time before
+  a multi-hour run is committed to. Both step2 and step3 print this
+  estimate before training starts.
+
+**What this changes for the results.** The RMSE/portfolio numbers
+currently in `reports/tables/` and `reports/figures/` were generated under
+the *old* static-split methodology and need to be regenerated by running
+the corrected pipeline — see `README.md`'s "Methodology correction"
+section. This will very likely change more than just RMSE: walk-forward
+retraining changes what the model has learned at each point in time, which
+changes daily turnover, which is the single biggest driver of the
+portfolio backtest's transaction-cost story.
+
+### `config.py` — single source of truth
+
+`N_STOCKS`, `TRAIN_END`, `TEST_START`, `TEST_END`, and `RETRAIN_EVERY` were
+previously copy-pasted independently into `step1_classical.py`,
+`step2_deep.py`, and `step3_tft.py`. That duplication is exactly how
+step1 and step2/3 were able to drift onto different evaluation
+methodologies without either script "knowing" about the other's approach.
+All four pipeline steps now import these constants (plus model
+hyperparameters and `QUICK_MODE`) from `config.py`.
+
+### `src/data/panel.py` — single universe-selection function
+
+Same duplication problem, smaller stakes: `step1_classical.py`,
+`step2_deep.py`, and `step3_tft.py` each had their own copy of "top-N
+stocks by market cap as of `TRAIN_END`." Factored into
+`select_universe()` so all pipeline steps are guaranteed to evaluate on
+identical stocks.
+
+### `src/models/deep.py` — single model-architecture module
+
+The LSTM/GRU architecture was defined three times (step2, step3's
+now-removed static code, and `walk_forward_dl.py`'s own copy). Factored
+into one module (`SequenceRegressor`, `TFTLite`, `build_model()`) that
+step2, step3, and the walk-forward engine all import.
+
+### GARCH conditional volatility now actually used
+
+`step1_classical.py` fit an AR(1)-GARCH(1,1)-t model at every walk-forward
+block, computed its one-step-ahead conditional volatility forecast, and
+discarded it — the volatility-scaled portfolio in `step4_downstream.py`
+used only realised (backward-looking) 21-day rolling volatility of actual
+returns. The GARCH forecast is now saved
+(`garch_conditional_vol_top100.parquet`) and `run_vol_scaled()` uses it
+where available, falling back to realised volatility elsewhere.
+
+### `QUICK_MODE` output isolation
+
+Every pipeline output filename now gets a `_quick` suffix when
+`DISSERTATION_QUICK_MODE=1` (i.e. when using `--quick`). This directly
+prevents a failure mode described in `lab_log/week_04.md`: a fast
+smoke-test run silently writing into the same `*_top100`-named files used
+for real full-scale results, corrupting them. Quick-mode and full-scale
+runs can no longer collide.
+
+### Graceful degradation for the Fama-French factor download
+
+`run_ff_alpha()` previously let a failed download (network issue, site
+temporarily blocking the request) crash the entire `step4_downstream.py`
+run, losing the DM/MCS/portfolio results that had already been computed
+in the same run. It now catches the failure, prints instructions for
+downloading the factors by hand, and lets the rest of step 4 complete.
+
+### Cleanup
+
+- **Removed 5 requirements files** (`requirements.txt`,
+  `requirements_final.txt`, `requirements_frozen.txt`,
+  `requirements_next_stage.txt`, `requirements_rerun.txt`) → replaced with
+  one `requirements.txt`, verified to install with no dependency conflicts
+  and to pass the full test suite. Note: pandas is pinned to 2.2.x rather
+  than 3.x specifically because `wrds` (needed for the CRSP pull)
+  hard-requires `pandas<2.3` — this incompatibility is exactly why the old
+  requirements_final.txt (pandas 3.0.3, no wrds) and requirements_frozen.txt
+  (pandas 2.2.3, wrds 3.5.0) had drifted into two different "final"
+  environments in the first place.
+- **Removed `backup_final_rerun/` and `final_submission_pipeline.zip`**
+  (91MB combined) — superseded working copies.
+- **Removed stale model checkpoints** (`reports/models/*.pt`,
+  `tft_checkpoints/`) — trained under the old static-split code path and
+  incompatible with the new walk-forward checkpoint format.
+- **Removed `reports/tables/portfolio_summary_5_10_25_bps.csv`** — this
+  file's data was entirely zeros (turnover-per-tier ended up empty, most
+  likely the top-10/bottom-10 overlap bug `lab_log/week_04.md` describes
+  during a QUICK_MODE run that got saved under a full-scale filename — see
+  the `QUICK_MODE` output isolation fix above). The correct data for the
+  same cost tiers is in `portfolio_summary.csv`, which the figures script
+  now uses instead.
+- **git history reset.** The CRSP parquet was committed in git history
+  despite the project's own README and `.gitignore` saying data must never
+  be committed — a real WRDS licensing compliance issue, and a large one
+  (~24MB blob). Rather than attempt an in-place history rewrite (which
+  still leaves the data recoverable from any existing clone or fork),
+  this delivery starts a fresh git history containing only the current,
+  clean tree. If you have an existing clone with the old history, treat
+  it as compromised for licensing purposes and re-clone from this version
+  instead of pulling.
+- **Removed `reports/test_results.txt`** — a stale pytest run log (43
+  tests; the suite is now 54) that also incidentally exposed the
+  student's real local file path (OneDrive sync path with full name)
+  from a `pytest -v` run. Not something that should be committed either
+  way; regenerate with `pytest tests/ -v > reports/test_results.txt` if
+  a snapshot is wanted, ideally run from a path that doesn't embed your
+  name.
+- **Scrubbed the student's real name/local file path from notebook
+  outputs** (`notebooks/06`, `07`, `09`, `10` — 7 instances of a full
+  `/Users/<name>/Library/CloudStorage/OneDrive-.../` path embedded in
+  executed cell output text). The dissertation identifies the candidate
+  by number (307385), not name, for anonymous marking — these leaked
+  outputs undercut that. Replaced with a generic `<project_root>`
+  placeholder; notebooks re-verified as valid JSON after the edit.
+  `dissertation_materials/final_results_summary.md`** — this document is
+  clearly meant to be pasted into the dissertation text, and it repeated
+  the same "identical walk-forward evaluation framework" claim as the
+  old README, in prose that reads as a settled finding rather than a
+  known limitation. Corrected the specific false sentences in place and
+  added a banner at the top pointing to this changelog, rather than
+  silently regenerating numbers this environment can't actually produce
+  (no licensed CRSP data, no multi-hour compute budget here).
+- **Figures regenerated** with clearer, more data-rich styling
+  (`scripts/generate_dissertation_figures.py`): model-family colour
+  coding (classical vs. deep learning), value labels, significance
+  markers, and a portfolio Sharpe chart broken out across all four cost
+  tiers instead of just one. Each figure is captioned with its source CSV
+  for traceability.
+- **README.md and README_pipeline.md merged** into one deployment-ready
+  `README.md` with an accurate methodology section (previously,
+  README_pipeline.md's "strict walk-forward" claim was false for
+  LSTM/GRU/TFT). `README_pipeline.md`'s dead reference to
+  `reports/final_run_2026_07_17/` (a directory that doesn't exist
+  anywhere in the repository) is gone along with it.
+- **Tests:** 46 → 54 (8 new: TFT support in the walk-forward engine,
+  checkpoint creation/clearing on completion, checkpoint resume correctly
+  skipping already-completed blocks — verified by counting actual fit
+  calls, not just checking output shape — and the runtime estimator).
+  All 54 pass under the exact pinned `requirements.txt` versions.

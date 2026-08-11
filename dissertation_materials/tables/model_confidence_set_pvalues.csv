@@ -1,0 +1,7 @@
+Model name,Pvalue
+ar1_garch_t,0.3712
+arma,0.3712
+mean_baseline,0.455
+tft,0.8986
+gru,0.8986
+lstm,1.0

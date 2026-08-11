@@ -1,0 +1,12 @@
+check,result
+Rows,1711517
+Unique PERMNOs,740
+Start date,2010-01-04 00:00:00
+End date,2024-12-31 00:00:00
+Duplicate PERMNO-date rows,0
+Rows outside membership period,0
+Missing combined returns,60
+Returns below -100%,0
+Negative market caps,0
+Rows containing DLRET,126
+Unmatched delisting records,0

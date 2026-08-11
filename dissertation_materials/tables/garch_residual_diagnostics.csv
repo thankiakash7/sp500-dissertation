@@ -1,0 +1,5 @@
+diagnostic,p_value,reject_null_at_5pct
+Ljung-Box on standardised residuals,0.2724297615635124,False
+Ljung-Box on squared standardised residuals,0.7068741009677382,False
+ARCH-LM on standardised residuals,0.7296231543342446,False
+Jarque-Bera on standardised residuals,3.345424570979894e-132,True

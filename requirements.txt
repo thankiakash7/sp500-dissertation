@@ -1,0 +1,64 @@
+# ============================================================
+# MSc Dissertation Pipeline — S&P 500 Forecasting
+# Classical (mean/ARMA/GARCH) + Deep Learning (LSTM/GRU/TFT) + Portfolio
+#
+# This is the ONLY requirements file — it replaces the previous five
+# (requirements.txt, requirements_final.txt, requirements_frozen.txt,
+# requirements_next_stage.txt, requirements_rerun.txt), which had drifted
+# out of sync with each other and with what the code actually imports.
+#
+# Versions below are pinned against a real, resolvable environment and
+# verified to install together with no dependency conflicts (checked with
+# `pip install -r requirements.txt` in a clean environment). Note: pandas
+# is pinned to 2.2.3 rather than the newer 3.x line specifically because
+# `wrds` (needed for the CRSP data pull) hard-requires `pandas<2.3` — pandas
+# 3.0.3 and wrds 3.5.0 cannot coexist in the same environment, which is why
+# the earlier requirements_final.txt (pandas 3.0.3, no wrds) and
+# requirements_frozen.txt (pandas 2.2.3, wrds 3.5.0) had silently drifted
+# into two incompatible "final" environments in the first place.
+#
+# Install with:
+#
+#     pip install -r requirements.txt
+#
+# See setup.sh for a guided Mac setup (Python version check, MPS check).
+# ============================================================
+
+# ── Core numerical stack ─────────────────────────────────────────────────
+numpy==2.5.1
+pandas==2.2.3
+scipy==1.18.0
+pyarrow==25.0.0
+
+# ── Statistics / econometrics ────────────────────────────────────────────
+statsmodels==0.14.6
+arch==8.0.0
+patsy==1.0.2
+
+# ── Machine learning / deep learning ─────────────────────────────────────
+# Note: step3_tft.py is a pure-PyTorch implementation (no Lightning, no
+# pytorch-forecasting) — those were an earlier plan, not a current
+# dependency. Only torch itself is required.
+scikit-learn==1.9.0
+torch==2.13.0
+
+# ── Data sources ──────────────────────────────────────────────────────────
+# wrds: pulls CRSP data (src/data/crsp.py) — needs a WRDS subscription.
+# yfinance: fallback/exploratory data source (src/data/loader.py), also
+# used by tests (mocked, but the package must be importable to patch it).
+wrds==3.5.0
+yfinance==1.4.1
+requests==2.34.2
+
+# ── Visualisation ─────────────────────────────────────────────────────────
+matplotlib==3.11.0
+seaborn==0.13.2
+pillow==12.3.0
+
+# ── Utilities ──────────────────────────────────────────────────────────────
+python-dateutil==2.9.0.post0
+typing_extensions==4.16.0
+tzdata==2026.3
+
+# ── Testing ──────────────────────────────────────────────────────────────
+pytest==9.1.1
