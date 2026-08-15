@@ -29,3 +29,7 @@ data/processed/_tft_meta*.pt
 # Downloaded Fama-French/Carhart factors — small enough to keep locally,
 # but re-downloadable, not source
 data/raw/ff_carhart_daily.csv
+Archive.zip
+.virtual_documents/
+.ipynb_checkpoints/
+anaconda_projects/

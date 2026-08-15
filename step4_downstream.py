@@ -409,7 +409,6 @@ def _download_ff_factors() -> pd.DataFrame:
                 columns=[
                     "date",
                     "MOM",
-                    "RF_mom"
                 ]
             )
 
